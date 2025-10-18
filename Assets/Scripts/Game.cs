@@ -5,6 +5,7 @@ using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using ChessDotNet; // <-- BARU: Menggunakan library yang benar
 using ChessDotNet.Pieces; // <-- BARU: Dibutuhkan untuk Catur
+using System.Threading.Tasks;
 
 public class Game : MonoBehaviour
 {
@@ -18,6 +19,8 @@ public class Game : MonoBehaviour
 
     // ----- OTAK LOGIKA BARU -----
     private ChessGame logicBrain; // <-- BARU: Menggunakan ChessGame, bukan ChessBoard
+    public StockfishPlayer aiPlayer;
+    private bool isAIMoving = false;
     // ----------------------------
 
     //current turn
@@ -58,7 +61,7 @@ public class Game : MonoBehaviour
     {
         GameObject obj = Instantiate(chesspiece, new Vector3(0, 0, -1), Quaternion.identity);
         Chessman cm = obj.GetComponent<Chessman>();
-        cm.name = name;
+        obj.name = name;
         cm.SetXBoard(x);
         cm.SetYBoard(y);
         cm.Activate();
@@ -116,6 +119,39 @@ public class Game : MonoBehaviour
             gameOver = false;
             SceneManager.LoadScene("Game");
         }
+
+        // ----- BARU: Logika Pemicu AI -----
+        // Kita akan set AI sebagai "black"
+        if (currentPlayer == "black" && !gameOver && !isAIMoving)
+        {
+            isAIMoving = true;
+            StartCoroutine(RequestAIMove());
+        }
+    }
+
+    private IEnumerator RequestAIMove()
+    {
+        // 1. Dapatkan FEN (status papan saat ini) dari otak logika
+        string currentFen = logicBrain.GetFen();
+
+        // 2. Minta AI untuk berpikir (ini berjalan di thread terpisah)
+        Task<string> moveTask = aiPlayer.RequestBestMove(currentFen);
+
+        // 3. Tunggu di sini tanpa membekukan game sampai task-nya selesai
+        yield return new WaitUntil(() => moveTask.IsCompleted);
+
+        // 4. Ambil hasilnya
+        string bestMove = moveTask.Result;
+
+        // 5. Lakukan langkah di game
+        if (bestMove != null)
+        {
+            // TryMakeMove sudah menangani logika visual dan giliran
+            TryMakeMove(bestMove);
+        }
+
+        // 6. Setel ulang flag agar AI bisa bergerak lagi nanti
+        isAIMoving = false;
     }
 
     public void Winner(string playerWinner)
@@ -163,50 +199,51 @@ public class Game : MonoBehaviour
     }
 
     // BARU: FUNGSI MASTER "SANG WASIT" (Ditulis ulang untuk ChessDotNet)
+    // GANTI FUNGSI LAMA ANDA DENGAN INI
     public bool TryMakeMove(string algebraicMove)
     {
         string fromAlg = "" + algebraicMove[0] + algebraicMove[1];
         string toAlg = "" + algebraicMove[2] + algebraicMove[3];
         Player playerToMove = logicBrain.WhoseTurn;
 
-        // Dapatkan koordinat untuk cek visual (untuk promosi)
         Vector2Int fromCoords = GetCoordsFromAlgebraic(fromAlg);
         Vector2Int toCoords = GetCoordsFromAlgebraic(toAlg);
-        GameObject pieceToMove = GetPosition(fromCoords.x, fromCoords.y);
 
-        // PERBAIKAN: Buat objek Position terlebih dahulu
+        // ----- PERBAIKAN PENGAMANAN -----
+        GameObject pieceToMove = GetPosition(fromCoords.x, fromCoords.y);
+        if (pieceToMove == null)
+        {
+            UnityEngine.Debug.LogError($"ERROR: TryMakeMove gagal karena pieceToMove di {fromAlg} adalah NULL.");
+            return false;
+        }
+        // ---------------------------------
+
         Position fromPos = new Position(fromAlg);
         Position toPos = new Position(toAlg);
-
-        // Buat objek Move
         Move move;
 
-        // PERBAIKAN: Penanganan Promosi
+        // Penanganan Promosi
         if (pieceToMove.name.Contains("pawn") && (toCoords.y == 7 || toCoords.y == 0))
         {
-            // Otomatis promosi ke Queen untuk saat ini
-            move = new Move(fromPos, toPos, playerToMove, 'Q'); // <-- PERBAIKAN: Menggunakan 'Q'
+            move = new Move(fromPos, toPos, playerToMove, 'Q');
         }
         else
         {
-            move = new Move(fromPos, toPos, playerToMove); // <-- PERBAIKAN: Menggunakan Position
+            move = new Move(fromPos, toPos, playerToMove);
         }
 
         // Cek ke otak catur apakah langkah ini legal
         if (logicBrain.IsValidMove(move))
         {
             // 1. Eksekusi langkah di otak logika
-            logicBrain.MakeMove(move, true); // true = sudah divalidasi
+            logicBrain.MakeMove(move, true);
 
             // 2. Eksekusi langkah di papan visual
-
-            // Cek apakah ada bidak yang dimakan (Capture)
             GameObject pieceToCapture = GetPosition(toCoords.x, toCoords.y);
             if (pieceToCapture != null)
             {
                 if (pieceToCapture.name == "white_king") Winner("black");
                 if (pieceToCapture.name == "black_king") Winner("white");
-
                 Destroy(pieceToCapture);
             }
 
@@ -214,21 +251,24 @@ public class Game : MonoBehaviour
             SetPositionEmpty(fromCoords.x, fromCoords.y);
             pieceToMove.GetComponent<Chessman>().SetXBoard(toCoords.x);
             pieceToMove.GetComponent<Chessman>().SetYBoard(toCoords.y);
+
+            // PERBAIKAN: Panggil SetCoords() SEBELUM SetPosition()
+            // Ini memastikan internal (x,y) bidak sudah benar SEBELUM kita menaruhnya di array 'positions'
             pieceToMove.GetComponent<Chessman>().SetCoords();
             SetPosition(pieceToMove);
 
             // Ganti giliran
             NextTurn();
-            Player nextPlayer = logicBrain.WhoseTurn;
 
-            if (logicBrain.IsCheckmated(nextPlayer)) // <-- PERBAIKAN: .IsCheckmated(player)
+            // Cek Game Over
+            Player nextPlayer = logicBrain.WhoseTurn;
+            if (logicBrain.IsCheckmated(nextPlayer))
             {
                 gameOver = true;
-                // Jika giliran Putih dan dia skakmat, Hitam menang
                 Winner(nextPlayer == Player.White ? "black" : "white");
             }
             else if (logicBrain.IsStalemated(nextPlayer) ||
-                        logicBrain.IsInsufficientMaterial())
+                     logicBrain.IsInsufficientMaterial())
             {
                 gameOver = true;
                 Winner("Draw");
@@ -237,6 +277,7 @@ public class Game : MonoBehaviour
             return true; // Langkah berhasil
         }
 
+        UnityEngine.Debug.LogWarning($"Langkah tidak valid DITOLAK oleh logicBrain: {algebraicMove}");
         return false; // Langkah tidak valid
     }
 }
