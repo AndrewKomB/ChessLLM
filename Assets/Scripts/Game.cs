@@ -21,6 +21,10 @@ public class Game : MonoBehaviour
     private ChessGame logicBrain; // <-- BARU: Menggunakan ChessGame, bukan ChessBoard
     public StockfishPlayer aiPlayer;
     private bool isAIMoving = false;
+    public Text pgnLogText;           // Slot untuk LogText
+    public ScrollRect pgnScrollRect;  // Slot untuk Scroll View
+    private int moveCounter = 1;
+    private string pgnHistory = "";
     // ----------------------------
 
     //current turn
@@ -55,6 +59,7 @@ public class Game : MonoBehaviour
         // ----- BARU: INISIALISASI OTAK LOGIKA -----
         logicBrain = new ChessGame(); // <-- BARU: Inisialisasi ChessGame
         // ------------------------------------------
+        if (pgnLogText != null) pgnLogText.text = "";
     }
 
     public GameObject Create(string name, int x, int y)
@@ -274,10 +279,50 @@ public class Game : MonoBehaviour
                 Winner("Draw");
             }
 
+            Player playerWhoMoved = playerToMove;
+
+            if (playerWhoMoved == Player.White)
+            {
+                // Ini langkah Putih, tambahkan nomor langkah
+                // Format: "1. e2e4 " (dengan spasi)
+                pgnHistory += $"{moveCounter}. {algebraicMove} ";
+            }
+            else
+            {
+                // Ini langkah Hitam, tambahkan baris baru
+                // Format: "e7e5\n"
+                pgnHistory += $"{algebraicMove}\n";
+                moveCounter++; // Naikkan nomor HANYA setelah Hitam bergerak
+            }
+
+            // Update UI Text
+            if (pgnLogText != null)
+            {
+                pgnLogText.text = pgnHistory;
+            }
+
+            // Paksa scroll ke bawah
+            StartCoroutine(ForceScrollDown());
+
+            // ----------------------------------------
+
             return true; // Langkah berhasil
         }
 
+
         UnityEngine.Debug.LogWarning($"Langkah tidak valid DITOLAK oleh logicBrain: {algebraicMove}");
         return false; // Langkah tidak valid
+    }
+    // BARU: Coroutine untuk memaksa scrollbar ke paling bawah
+    private IEnumerator ForceScrollDown()
+    {
+        // Tunggu hingga akhir frame (saat UI selesai di-render)
+        yield return new WaitForEndOfFrame();
+
+        // Paksa nilai scrollbar ke 0 (paling bawah)
+        if (pgnScrollRect != null)
+        {
+            pgnScrollRect.verticalNormalizedPosition = 0f;
+        }
     }
 }

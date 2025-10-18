@@ -12,7 +12,7 @@ public class StockfishPlayer : MonoBehaviour
     private StreamReader processOutput;
 
     private Task<string> currentMoveTask;
-
+    
     void Start()
     {
         // Tentukan path ke stockfish.exe di folder StreamingAssets
@@ -62,11 +62,12 @@ public class StockfishPlayer : MonoBehaviour
             }
             if (output == "readyok")
             {
-                UnityEngine.Debug.Log("Stockfish Siap (UCI Ready).");
+                UnityEngine.Debug.Log("Stockfish Siap (UCI Ready)."); // Log ke Console
                 break;
             }
         }
     }
+
 
     // Ini adalah fungsi publik yang akan dipanggil oleh Game.cs
     // Ini berjalan secara asynchronous (di background) agar game tidak freeze
@@ -78,21 +79,20 @@ public class StockfishPlayer : MonoBehaviour
             return null;
         }
 
-        // 1. Atur posisi papan saat ini menggunakan FEN
         await processInput.WriteLineAsync($"position fen {fen}");
-
-        // 2. Minta Stockfish untuk berpikir (misal: 1000ms = 1 detik)
         await processInput.WriteLineAsync("go movetime 1000");
 
-        // 3. Baca output dari Stockfish sampai menemukan "bestmove"
         string output;
         while ((output = await processOutput.ReadLineAsync()) != null)
         {
+            // Kita masih bisa log "pikiran" ke Console jika mau, tapi tidak ke UI
+            // if (output.StartsWith("info")) UnityEngine.Debug.Log(output);
+
             if (output.StartsWith("bestmove"))
             {
                 string bestMove = output.Split(' ')[1];
-                UnityEngine.Debug.Log($"Stockfish memilih: {bestMove}");
-                return bestMove; // Kembalikan langkah (misal: "e2e4")
+                UnityEngine.Debug.Log($"Stockfish memilih: {bestMove}"); // Log ke Console
+                return bestMove;
             }
         }
         return null;
