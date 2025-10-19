@@ -14,6 +14,7 @@ public class LLMPlayer : MonoBehaviour
 
     // ----- PERBAIKAN: Menggunakan endpoint /api/chat -----
     private string ollamaUrl = "http://localhost:11434/api/chat";
+    private string lastRawResponse = "";
 
     // Fungsi utama yang akan dipanggil oleh Game.cs
     public async Task<string> ChooseBestMove(string fen, List<string> options) // <-- NAMA & PARAMETER BARU
@@ -62,11 +63,17 @@ public class LLMPlayer : MonoBehaviour
 
         // Respons sekarang ada di dalam objek 'message'
         string rawResponse = ollamaResponse.message.content;
+        lastRawResponse = rawResponse;
         string cleanedMove = CleanResponse(rawResponse, options);
 
         Debug.Log($"LLM Raw: '{rawResponse}' | Cleaned: '{cleanedMove}'");
 
         return cleanedMove;
+    }
+
+    public string GetLastRawResponse()
+    {
+        return lastRawResponse;
     }
 
     // Prompt

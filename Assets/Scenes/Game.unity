@@ -507,6 +507,7 @@ GameObject:
   m_Component:
   - component: {fileID: 503884393}
   - component: {fileID: 503884394}
+  - component: {fileID: 503884395}
   m_Layer: 0
   m_Name: Controller
   m_TagString: GameController
@@ -551,6 +552,19 @@ MonoBehaviour:
   pgnScrollRect: {fileID: 1996185477}
   llmDecisionLogText: {fileID: 2097559054}
   llmDecisionScrollRect: {fileID: 711551905}
+  dataLogger: {fileID: 503884395}
+--- !u!114 &503884395
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 503884392}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 093d7d98f059c6f40bb75e9350aeb461, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
 --- !u!1 &519420028
 GameObject:
   m_ObjectHideFlags: 0
@@ -2097,7 +2111,7 @@ GameObject:
   - component: {fileID: 1981988842}
   m_Layer: 5
   m_Name: DrawText
-  m_TagString: WinnerText
+  m_TagString: DrawText
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0

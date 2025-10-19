@@ -31,6 +31,7 @@ public class Game : MonoBehaviour
     public ScrollRect pgnScrollRect;  // Slot untuk Scroll View
     public Text llmDecisionLogText;     // Slot untuk Text UI Keputusan LLM
     public ScrollRect llmDecisionScrollRect; // Slot untuk Scroll View Keputusan LLM
+    public DataLogger dataLogger;
     private int moveCounter = 1;
     private string pgnHistory = "";
     // ----------------------------
@@ -66,6 +67,15 @@ public class Game : MonoBehaviour
             SetPosition(playerWhite[i]);
         }
 
+        dataLogger = GetComponent<DataLogger>();
+        if (dataLogger == null)
+        {
+            Debug.LogError("Komponen DataLogger tidak ditemukan di GameObject ini!");
+        }
+        else
+        {
+            dataLogger.InitializeCSV(); // Mulai file log baru
+        }
         // ----- BARU: INISIALISASI OTAK LOGIKA -----
         logicBrain = new ChessGame(); // <-- BARU: Inisialisasi ChessGame
         // ------------------------------------------
@@ -250,10 +260,21 @@ public class Game : MonoBehaviour
     }
 
     // GANTI COROUTINE LAMA DENGAN VERSI BARU INI
+    // GANTI SELURUH COROUTINE LAMA DENGAN VERSI BARU INI
     private IEnumerator RequestLLMMove()
     {
-        // Beri jeda
-        yield return new WaitForSeconds(turnDelay);
+        // Beri jeda hanya di mode otomatis
+        if (!isManualStepMode && turnDelay > 0)
+        {
+            yield return new WaitForSeconds(turnDelay);
+        }
+        // Jika game berakhir saat menunggu, hentikan
+        if (gameOver)
+        {
+            isAIMoving = false;
+            yield break;
+        }
+
 
         // 1. Dapatkan FEN
         string currentFen = logicBrain.GetFen();
@@ -267,7 +288,7 @@ public class Game : MonoBehaviour
         yield return new WaitUntil(() => topMovesTask.IsCompleted);
         Debug.Log("[LLM Step 1] Task Stockfish SELESAI.");
 
-        // 4. Ambil hasilnya (berupa List<string>)
+        // 4. Ambil hasilnya
         List<string> topMoves = topMovesTask.Result;
 
         // 5. Validasi hasil dari Stockfish
@@ -275,83 +296,127 @@ public class Game : MonoBehaviour
         {
             Debug.LogError("Stockfish gagal memberikan saran langkah!");
             isAIMoving = false;
-            yield break;
+            yield break; // Hentikan coroutine
         }
 
-        // ----- PERBAIKAN LOGIKA LOGGING -----
-        // 6. Siapkan string log AWAL (FEN + Opsi + Meminta)
-        string decisionLog = $"Giliran {moveCounter} (Putih - LLM)\n";
-        decisionLog += $"FEN: {currentFen}\n";
-        decisionLog += "Stockfish menyarankan:\n";
-        for (int i = 0; i < topMoves.Count; i++)
+        // --- Variabel untuk Retry Loop ---
+        int maxRetries = 3;
+        int retryCount = 0;
+        string chosenMove = null; // Deklarasi di luar loop
+        string llmRawResp = "";
+        bool moveMadeSuccessfully = false;
+        //bool failedMaxRetry = false;
+        //bool playedDefaultMove = false;
+
+        // --- Retry Loop ---
+        while (retryCount < maxRetries && !moveMadeSuccessfully)
         {
-            decisionLog += $"{i + 1}. {topMoves[i]}\n";
-        }
-        decisionLog += "\nMeminta LLM untuk memilih...\n"; // Tambahkan pesan menunggu
+            // 6. Siapkan log awal
+            string decisionLog = $"Giliran {moveCounter} (Putih - LLM) [Percobaan {retryCount + 1}/{maxRetries}]\n";
+            decisionLog += $"FEN: {currentFen}\n";
+            decisionLog += "Stockfish menyarankan:\n";
+            for (int i = 0; i < topMoves.Count; i++) decisionLog += $"{i + 1}. {topMoves[i]}\n";
+            decisionLog += "\nMeminta LLM untuk memilih...\n";
 
-        // 7. Update UI Log SEBELUM memanggil LLM (Tampilkan FEN, Opsi, Menunggu)
-        if (llmDecisionLogText != null)
-        {
-            llmDecisionLogText.text += decisionLog; // Tambahkan log awal
-            TrimUIText(llmDecisionLogText);
-            StartCoroutine(ForceScrollDown(llmDecisionScrollRect));
-        }
-
-        // 8. Panggil LLM untuk memilih dari 3 opsi
-        Debug.Log("[LLM Step 2] Meminta LLM memilih...");
-        Task<string> choiceTask = llmPlayer.ChooseBestMove(currentFen, topMoves);
-
-        // 9. Tunggu LLM selesai berpikir
-        Debug.Log("[LLM Step 2] Menunggu Task LLM selesai...");
-        yield return new WaitUntil(() => choiceTask.IsCompleted);
-        Debug.Log("[LLM Step 2] Task LLM SELESAI.");
-
-        // 10. Ambil pilihan LLM (bisa null jika LLM gagal)
-        string chosenMove = choiceTask.Result;
-
-        // 11. Siapkan string log AKHIR (Hasil Pilihan LLM)
-        string choiceResultLog = "";
-        if (chosenMove != null)
-        {
-            choiceResultLog = $"LLM Memilih: {chosenMove}\n---\n";
-        }
-        else
-        {
-            choiceResultLog = $"LLM GAGAL memilih dari opsi!\n---\n";
-        }
-
-        // 12. Update UI Log LAGI (Tambahkan hasil pilihan ke log yang sudah ada)
-        if (llmDecisionLogText != null)
-        {
-            llmDecisionLogText.text += choiceResultLog; // Tambahkan hasil pilihan
-            TrimUIText(llmDecisionLogText);
-            StartCoroutine(ForceScrollDown(llmDecisionScrollRect));
-        }
-        // ----- AKHIR PERBAIKAN LOGGING -----
-
-
-        // 13. Coba lakukan langkah yang dipilih
-        if (chosenMove != null && TryMakeMove(chosenMove))
-        {
-            // Sukses
-            isAIMoving = false;
-        }
-        else
-        {
-            // Gagal / Retry
-            if (chosenMove == null)
+            // 7. Update UI Log sebelum panggil LLM
+            if (llmDecisionLogText != null)
             {
-                UnityEngine.Debug.LogWarning($"LLM GAGAL memilih langkah yang valid dari opsi. Mencoba lagi...");
+                llmDecisionLogText.text += decisionLog;
+                TrimUIText(llmDecisionLogText);
+                StartCoroutine(ForceScrollDown(llmDecisionScrollRect));
+            }
+
+            // 8. Panggil LLM
+            Debug.Log("[LLM Step 2] Meminta LLM memilih...");
+            Task<string> choiceTask = llmPlayer.ChooseBestMove(currentFen, topMoves);
+
+            // 9. Tunggu LLM
+            Debug.Log("[LLM Step 2] Menunggu Task LLM selesai...");
+            yield return new WaitUntil(() => choiceTask.IsCompleted);
+            // Jika game berakhir saat menunggu LLM, hentikan
+            if (gameOver)
+            {
+                isAIMoving = false;
+                yield break;
+            }
+            Debug.Log("[LLM Step 2] Task LLM SELESAI.");
+
+            // 10. Ambil pilihan LLM (gunakan variabel di luar loop)
+            chosenMove = choiceTask.Result; // Bisa null
+            llmRawResp = llmPlayer.GetLastRawResponse(); // Ambil raw response
+
+            // 11. Siapkan log hasil pilihan
+            string choiceResultLog = (chosenMove != null)
+                ? $"LLM Memilih: {chosenMove}\n---\n"
+                : $"LLM GAGAL memilih dari opsi!\n---\n";
+
+            // 12. Update UI Log setelah LLM menjawab
+            if (llmDecisionLogText != null)
+            {
+                llmDecisionLogText.text += choiceResultLog;
+                TrimUIText(llmDecisionLogText);
+                StartCoroutine(ForceScrollDown(llmDecisionScrollRect));
+            }
+
+            // 13. Coba lakukan langkah
+            if (chosenMove != null && TryMakeMove(chosenMove))
+            {
+                moveMadeSuccessfully = true; // Sukses, keluar loop
+                                             // LOG DATA SUKSES LLM
+                if (dataLogger != null)
+                {
+                    dataLogger.LogData(moveCounter, "White", currentFen, topMoves.Count > 0 ? topMoves[0] : "", topMoves.Count > 1 ? topMoves[1] : "", topMoves.Count > 2 ? topMoves[2] : "", llmRawResp, chosenMove, chosenMove, false, false, false);
+                }
             }
             else
             {
-                // Seharusnya tidak terjadi jika LLM memilih dari opsi Stockfish
-                UnityEngine.Debug.LogError($"Langkah '{chosenMove}' yang dipilih LLM GAGAL dieksekusi oleh TryMakeMove! FEN: {currentFen}");
+                // Gagal (chosenMove null ATAU TryMakeMove false)
+                retryCount++; // <-- PERBAIKAN: Naikkan retry count
+                Debug.LogWarning($"LLM gagal memilih/langkah ditolak (percobaan {retryCount}/{maxRetries}).");
+                // LOG DATA GAGAL SEMENTARA LLM
+                if (dataLogger != null)
+                {
+                    dataLogger.LogData(moveCounter, "White", currentFen, topMoves.Count > 0 ? topMoves[0] : "", topMoves.Count > 1 ? topMoves[1] : "", topMoves.Count > 2 ? topMoves[2] : "", llmRawResp, chosenMove ?? "NULL", "", true, (retryCount >= maxRetries), false); // Tandai jika ini retry terakhir
+                }
+                yield return null; // Jeda singkat antar retry
             }
-            UnityEngine.Debug.Log("[LLM] Coroutine SELESAI. Menyetel isAIMoving = false.");
-            isAIMoving = false; // Izinkan retry loop
+        } // --- Akhir While Loop ---
+
+        // --- Logika Setelah Loop Selesai ---
+        // Jika loop selesai tapi belum sukses = Gagal Max Retry
+        if (!moveMadeSuccessfully)
+        {
+            //failedMaxRetry = true; // Tandai gagal max
+            string defaultMove = topMoves[0]; // Ambil langkah default
+            Debug.LogWarning($"LLM mencapai batas retry. Memainkan langkah default Stockfish #1: {defaultMove}");
+            string finalLog = $"LLM GAGAL MAX RETRY. Memainkan default: {defaultMove}\n---\n";
+            //playedDefaultMove = true; // Tandai main default
+
+            // Update UI log
+            if (llmDecisionLogText != null)
+            {
+                llmDecisionLogText.text += finalLog;
+                TrimUIText(llmDecisionLogText);
+                StartCoroutine(ForceScrollDown(llmDecisionScrollRect));
+            }
+
+            // LOG DATA GAGAL FINAL & DEFAULT MOVE (Sudah dicatat di loop percobaan terakhir)
+            if (dataLogger != null)
+            {
+                // Pastikan parameter terakhir adalah 'true'
+                dataLogger.LogData(moveCounter, "White", currentFen, topMoves[0], topMoves.Count > 1 ? topMoves[1] : "", topMoves.Count > 2 ? topMoves[2] : "", llmRawResp, chosenMove ?? "NULL", defaultMove, true, true, true); // <-- PASTIKAN INI 'true'
+            }
+
+            // Eksekusi langkah default
+            TryMakeMove(defaultMove);
+            // Kita anggap TryMakeMove untuk langkah Stockfish #1 selalu berhasil
+            // Jika TryMakeMove gagal di sini, akan ada LogError dari TryMakeMove itu sendiri
         }
-    }
+
+        // --- AKHIR COROUTINE ---
+        UnityEngine.Debug.Log("[LLM] Coroutine SELESAI. Menyetel isAIMoving = false.");
+        isAIMoving = false; // <-- PERBAIKAN: Pindahkan ke paling akhir
+    } // Akhir Coroutine LLM
     private IEnumerator RequestStockfishMove()
     {
         // 1. Dapatkan FEN (status papan saat ini) dari otak logika
@@ -368,6 +433,17 @@ public class Game : MonoBehaviour
 
         // 4. Ambil hasilnya
         string bestMove = moveTask.Result;
+
+        if (dataLogger != null && bestMove != null) // Hanya log jika ada langkah
+        {
+            dataLogger.LogData(
+                turnNumber: moveCounter, // Gunakan moveCounter saat ini
+                player: "Black",
+                fenBefore: currentFen,
+                finalExecutedMove: bestMove // Ini langkah yang akan dimainkan
+                                            // Parameter lain kosong (tidak relevan untuk Stockfish murni)
+            );
+        }
 
         // 5. Lakukan langkah di game
         if (bestMove != null)
