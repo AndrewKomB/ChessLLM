@@ -1,0 +1,144 @@
+using System.Collections.Generic;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using UnityEngine;
+using UnityEngine.Networking;
+using System;
+using System.Linq;
+
+public class LLMPlayer : MonoBehaviour
+{
+    // --- KONFIGURASI GEMINI ---
+    // Model yang tersedia: "gemini-2.5-flash" (Cepat) atau "gemini-2.5-pro" (Pintar)
+    public string modelName = "gemini-2.5-flash";
+
+    // API Key Gemini Anda (GANTI 'AIza...' DENGAN KEY ASLI ANDA!)
+    private string geminiApiKey = "AIzaSyCBuPsoOn0KYdeaJCHelLzEMDDyWPZPbSs";
+
+    private string lastRawResponse = "";
+
+    public async Task<string> ChooseBestMove(string fen, List<string> options)
+    {
+        await Task.Delay(5000);
+        string prompt = BuildChoicePrompt(fen, options);
+
+        // 1. Membuat Request JSON (Format Gemini)
+        GeminiRequest requestData = new GeminiRequest
+        {
+            contents = new List<GeminiContent>
+            {
+                new GeminiContent
+                {
+                    parts = new List<GeminiPart>
+                    {
+                        new GeminiPart { text = prompt }
+                    }
+                }
+            }
+        };
+
+        string jsonRequest = JsonUtility.ToJson(requestData);
+        byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonRequest);
+
+        // 2. URL Endpoint Gemini (API Key ada di URL, bukan Header)
+        string url = $"https://generativelanguage.googleapis.com/v1beta/models/{modelName}:generateContent?key={geminiApiKey}";
+
+        UnityWebRequest webRequest = new UnityWebRequest(url, "POST");
+        webRequest.uploadHandler = new UploadHandlerRaw(bodyRaw);
+        webRequest.downloadHandler = new DownloadHandlerBuffer();
+        webRequest.SetRequestHeader("Content-Type", "application/json");
+
+        // 3. Kirim Request
+        try
+        {
+            await webRequest.SendWebRequest();
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Gemini Request Error: {e.Message}");
+            return null;
+        }
+
+        if (webRequest.result != UnityWebRequest.Result.Success)
+        {
+            Debug.LogError($"Gemini Error: {webRequest.error} | {webRequest.downloadHandler.text}");
+            return null;
+        }
+
+        // 4. Parsing Jawaban Gemini
+        string jsonResponse = webRequest.downloadHandler.text;
+        GeminiResponse responseObj = JsonUtility.FromJson<GeminiResponse>(jsonResponse);
+
+        string rawResponse = "";
+        if (responseObj.candidates != null && responseObj.candidates.Count > 0)
+        {
+            // Struktur Gemini: candidates[0] -> content -> parts[0] -> text
+            if (responseObj.candidates[0].content != null &&
+               responseObj.candidates[0].content.parts != null &&
+               responseObj.candidates[0].content.parts.Count > 0)
+            {
+                rawResponse = responseObj.candidates[0].content.parts[0].text;
+            }
+        }
+        else
+        {
+            Debug.LogError("Gagal mem-parsing JSON Gemini.");
+            return null;
+        }
+
+        lastRawResponse = rawResponse;
+        string cleanedMove = CleanResponse(rawResponse, options);
+
+        Debug.Log($"Gemini Raw: '{rawResponse}' | Cleaned: '{cleanedMove}'");
+
+        return cleanedMove;
+    }
+
+    public string GetLastRawResponse()
+    {
+        return lastRawResponse;
+    }
+
+    // ... (Fungsi BuildChoicePrompt dan CleanResponse SAMA PERSIS dengan sebelumnya) ...
+    // (Salin ulang fungsi tersebut dari kode lama Anda ke sini jika hilang)
+
+    // Prompt
+    private string BuildChoicePrompt(string fen, List<string> options)
+    {
+        string optionsString = "";
+        for (int i = 0; i < options.Count; i++)
+        {
+            optionsString += $"{i + 1}. {options[i]}\n";
+        }
+
+        return $"You are a world-class chess grandmaster evaluating potential moves. Given the following FEN position and three candidate moves (in long algebraic notation), your task is to choose the single best move from the options provided.\n\n" +
+               $"FEN: {fen}\n\n" +
+               $"Candidate Moves:\n" +
+               $"{optionsString}\n" +
+               $"Which move do you choose? Respond ONLY with the chosen move notation (e.g., e2e4). Do not include the number, explanation, or any other text.\n\n" +
+               $"Your choice:";
+    }
+
+    private string CleanResponse(string rawResponse, List<string> validOptions)
+    {
+        foreach (string option in validOptions)
+        {
+            if (Regex.IsMatch(rawResponse.Trim(), @"\b" + Regex.Escape(option) + @"\b", RegexOptions.IgnoreCase))
+            {
+                return option;
+            }
+        }
+        Match match = Regex.Match(rawResponse, @"[a-h][1-8][a-h][1-8][qrbn]?");
+        if (match.Success)
+        {
+            string potentialMove = match.Value;
+            if (validOptions.Contains(potentialMove, StringComparer.OrdinalIgnoreCase))
+            {
+                return validOptions.First(opt => opt.Equals(potentialMove, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        Debug.LogWarning($"Gemini Response '{rawResponse.Trim()}' tidak cocok dengan opsi: {string.Join(", ", validOptions)}");
+        return null;
+    }
+}
