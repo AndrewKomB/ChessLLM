@@ -1,0 +1,55 @@
+using System.Collections.Generic;
+using System;
+
+// --- STRUKTUR OLLAMA (LOKAL) ---
+[System.Serializable]
+public class OllamaRequest
+{
+    public string model;
+    public List<OllamaMessage> messages;
+    public bool stream = false;
+}
+
+[System.Serializable]
+public class OllamaMessage
+{
+    public string role;
+    public string content;
+}
+
+[System.Serializable]
+public class OllamaResponse
+{
+    public OllamaMessage message; // Format lama/standar Ollama
+}
+
+// --- STRUKTUR GEMINI (CLOUD) ---
+[System.Serializable]
+public class GeminiRequest
+{
+    public List<GeminiContent> contents;
+}
+
+[System.Serializable]
+public class GeminiContent
+{
+    public List<GeminiPart> parts;
+}
+
+[System.Serializable]
+public class GeminiPart
+{
+    public string text;
+}
+
+[System.Serializable]
+public class GeminiResponse
+{
+    public List<GeminiCandidate> candidates;
+}
+
+[System.Serializable]
+public class GeminiCandidate
+{
+    public GeminiContent content;
+}
