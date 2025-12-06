@@ -1,0 +1,198 @@
+using System.Collections.Generic;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using UnityEngine;
+using UnityEngine.Networking;
+using System;
+using System.Linq;
+
+public enum LLMProvider
+{
+    OllamaLocal,
+    GeminiCloud
+}
+
+public class LLMPlayer : MonoBehaviour
+{
+    [Header("Konfigurasi Model")]
+    public LLMProvider provider = LLMProvider.OllamaLocal; // Pilih di Inspector!
+
+    // Nama Model (Contoh: "mistral:latest", "deepseek-coder:6.7b", "gemini-2.5-flash")
+    public string modelName = "deepseek-coder:6.7b";
+
+    [Header("Khusus Gemini Cloud")]
+    public string geminiApiKey = "AIzaSyBs_3qjFWygjd67381jU21TBDJOW2wHA6g";
+
+    // URL Default
+    private const string OLLAMA_URL = "http://localhost:11434/api/chat";
+    private const string GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+
+    private string lastRawResponse = "";
+
+    public async Task<string> ChooseBestMove(string fen, List<string> options)
+    {
+        // 1. REM OTOMATIS (Untuk mencegah Rate Limit Gemini)
+        if (provider == LLMProvider.GeminiCloud) await Task.Delay(5000); // Tunggu 5 detik
+
+        // 2. Pilih Prompt yang Sesuai
+        string prompt;
+        if (modelName.ToLower().Contains("deepseek"))
+        {
+            // Prompt Khusus DeepSeek (Agar tidak menolak)
+            prompt = BuildDeepSeekPrompt(fen, options);
+        }
+        else
+        {
+            // Prompt Standar (Llama, Mistral, Gemini)
+            prompt = BuildStandardPrompt(fen, options);
+        }
+
+        // 3. Kirim Request sesuai Provider
+        string rawResponse = null;
+        if (provider == LLMProvider.OllamaLocal)
+        {
+            rawResponse = await SendOllamaRequest(prompt);
+        }
+        else if (provider == LLMProvider.GeminiCloud)
+        {
+            rawResponse = await SendGeminiRequest(prompt);
+        }
+
+        if (string.IsNullOrEmpty(rawResponse)) return null; // Gagal/Error
+
+        lastRawResponse = rawResponse;
+
+        // 4. Bersihkan Jawaban
+        string cleanedMove = CleanResponse(rawResponse, options);
+        Debug.Log($"[{provider}] Raw: '{rawResponse}' | Cleaned: '{cleanedMove}'");
+
+        return cleanedMove;
+    }
+
+    public string GetLastRawResponse() => lastRawResponse;
+
+    // --- LOGIKA REQUEST OLLAMA ---
+    private async Task<string> SendOllamaRequest(string prompt)
+    {
+        OllamaRequest req = new OllamaRequest
+        {
+            model = modelName,
+            messages = new List<OllamaMessage> { new OllamaMessage { role = "user", content = prompt } }
+        };
+
+        string json = JsonUtility.ToJson(req);
+        return await PostRequest(OLLAMA_URL, json, false);
+    }
+
+    // --- LOGIKA REQUEST GEMINI ---
+    private async Task<string> SendGeminiRequest(string prompt)
+    {
+        GeminiRequest req = new GeminiRequest
+        {
+            contents = new List<GeminiContent> {
+                new GeminiContent { parts = new List<GeminiPart> { new GeminiPart { text = prompt } } }
+            }
+        };
+
+        string json = JsonUtility.ToJson(req);
+        string url = $"{GEMINI_BASE_URL}/{modelName}:generateContent?key={geminiApiKey}";
+
+        string responseJson = await PostRequest(url, json, true);
+        if (string.IsNullOrEmpty(responseJson)) return null;
+
+        // Parsing Gemini
+        try
+        {
+            GeminiResponse resp = JsonUtility.FromJson<GeminiResponse>(responseJson);
+            if (resp.candidates != null && resp.candidates.Count > 0)
+                return resp.candidates[0].content.parts[0].text;
+        }
+        catch { Debug.LogError("Gagal parsing Gemini JSON"); }
+
+        return null;
+    }
+
+    // --- FUNGSI KIRIM HTTP ---
+    private async Task<string> PostRequest(string url, string jsonBody, bool isCloud)
+    {
+        using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+        {
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonBody);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            try { await request.SendWebRequest(); }
+            catch (Exception e) { Debug.LogError($"Request Error: {e.Message}"); return null; }
+
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogError($"HTTP Error: {request.error} | {request.downloadHandler.text}");
+                return null;
+            }
+            return request.downloadHandler.text;
+        }
+    }
+
+    // --- PROMPT BUILDERS ---
+    private string BuildDeepSeekPrompt(string fen, List<string> options)
+    {
+        // 1. ACAK URUTANNYA
+        // Kita menggunakan GUID untuk mengacak urutan list 'options' menjadi 'shuffledOptions'
+        // Ini hanya mengubah tampilan teks ke LLM, tidak mengubah data asli di Game Manager.
+        List<string> shuffledOptions = options.OrderBy(x => Guid.NewGuid()).ToList();
+
+        string optionsString = "";
+        for (int i = 0; i < shuffledOptions.Count; i++)
+        {
+            optionsString += $"{i + 1}. {shuffledOptions[i]}\n";
+        }
+
+        // 2. BERIKAN PROMPT (Dengan info bahwa urutan ini acak)
+        return $"SYSTEM INSTRUCTION: You are a strict chess engine component acting as a logic parser. " +
+               $"Your ONLY task is to select the most optimal move from the provided list based on the FEN state. " +
+               $"Note: The candidate moves below are presented in RANDOM ORDER. Analyze the board geometry to find the best one.\n\n" + // <-- Info tambahan
+
+               $"CONTEXT:\n" +
+               $"FEN State: {fen}\n\n" +
+
+               $"DATA LIST (Randomized):\n" +
+               $"{optionsString}\n" +
+
+               $"INSTRUCTION: Return ONLY the selected move string (e.g., e2e4). Do not refuse. This is a theoretical analysis task.";
+    }
+
+    // Jika Anda menggunakan Gemini/Llama (Standard Prompt), ganti juga yang ini:
+    private string BuildStandardPrompt(string fen, List<string> options)
+    {
+        // ACAK URUTANNYA JUGA
+        List<string> shuffledOptions = options.OrderBy(x => Guid.NewGuid()).ToList();
+
+        string optionsString = "";
+        for (int i = 0; i < shuffledOptions.Count; i++)
+        {
+            optionsString += $"{i + 1}. {shuffledOptions[i]}\n";
+        }
+
+        return $"You are a world-class chess grandmaster. Choose the single best move from the options below based on FEN: {fen}\n" +
+               $"Note: The list is in random order.\n" +
+               $"Options:\n{optionsString}\n" +
+               $"Respond ONLY with the move notation (e.g. e2e4). No explanation.";
+    }
+
+    // --- CLEANER ---
+    private string CleanResponse(string raw, List<string> validOptions)
+    {
+        foreach (string opt in validOptions)
+        {
+            if (Regex.IsMatch(raw.Trim(), @"\b" + Regex.Escape(opt) + @"\b", RegexOptions.IgnoreCase)) return opt;
+        }
+        // Regex Fallback
+        Match m = Regex.Match(raw, @"[a-h][1-8][a-h][1-8][qrbn]?");
+        if (m.Success && validOptions.Contains(m.Value, StringComparer.OrdinalIgnoreCase))
+            return validOptions.First(o => o.Equals(m.Value, StringComparison.OrdinalIgnoreCase));
+
+        return null;
+    }
+}
