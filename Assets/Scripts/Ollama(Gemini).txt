@@ -1,0 +1,36 @@
+using System.Collections.Generic;
+using System;
+
+// Struktur JSON Khusus Google Gemini API
+// Dokumentasi: https://ai.google.dev/api/rest/v1beta/models/generateContent
+
+[System.Serializable]
+public class GeminiRequest
+{
+    public List<GeminiContent> contents;
+}
+
+[System.Serializable]
+public class GeminiContent
+{
+    public List<GeminiPart> parts;
+}
+
+[System.Serializable]
+public class GeminiPart
+{
+    public string text;
+}
+
+[System.Serializable]
+public class GeminiResponse
+{
+    public List<GeminiCandidate> candidates;
+}
+
+[System.Serializable]
+public class GeminiCandidate
+{
+    public GeminiContent content;
+    public string finishReason;
+}
